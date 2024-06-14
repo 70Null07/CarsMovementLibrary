@@ -3,12 +3,9 @@ using Compunet.YoloV8;
 using MediaFileProcessor.Models.Common;
 using MediaFileProcessor.Models.Enums;
 using MediaFileProcessor.Processors;
-using Microsoft.EntityFrameworkCore;
 using Newtonsoft.Json.Linq;
-using System.ComponentModel;
 using System.Drawing;
 using System.Drawing.Drawing2D;
-using System.Drawing.Imaging;
 using System.IO;
 
 namespace CarsMovementLibrary
@@ -84,14 +81,83 @@ namespace CarsMovementLibrary
 						Borders = [new Point(158, 445), new Point(211, 433), new Point(268, 522), new Point(253, 533)]
 					},
 				];
-            var json = File.ReadAllText("./parkingplaces.json");
+            //var json = File.ReadAllText("./parkingplaces.json");
+            var json = File.ReadAllText(System.IO.Path.GetFullPath(@"..\..\parkingplaces.json"));
 
             var jObject = JObject.Parse(json);
-            ParkingSpaces = jObject["ParkingSpaces"].ToObject<List<ParkingSpace>>();
+            try
+            {
+                ParkingSpaces = jObject["ParkingSpaces"].ToObject<List<ParkingSpace>>();
+            }
+			catch (Exception)
+            {
+				ParkingSpaces = new List<ParkingSpace>();
+            }
+			if (ParkingSpaces == null)
 
+			ParkingImg = new(0, 0);
+			VideoPath = string.Empty;
 
             _context = new Data.ApplicationContext();
 		}
+
+		public void GenerateNewData()
+		{
+            Random rnd = new Random();
+            DateTime startDateTime = new DateTime(2024, 3, 25);
+            DateTime endDateTime = new DateTime(2024, 4, 1);
+            int parkingSpots = 115;
+            Dictionary<string, DateTime> parkingState = new Dictionary<string, DateTime>();
+
+            while (startDateTime < endDateTime)
+            {
+                int carsToEnter = 0;
+                if (startDateTime.Hour >= 18 && startDateTime.Hour <= 20) // вечер
+                {
+                    carsToEnter = rnd.Next(50, 77); // случайное количество автомобилей въезжает каждый вечер
+                }
+                else if (startDateTime.Hour >= 7 && startDateTime.Hour <= 8) // утро
+                {
+                    carsToEnter = rnd.Next(1, 10); // меньшее количество автомобилей въезжает утром
+                }
+                else // день
+                {
+                    carsToEnter = rnd.Next(1, 5); // случайное количество автомобилей въезжает в течение дня
+                }
+
+                for (int i = 0; i < carsToEnter; i++)
+                {
+                    if (parkingState.Count < parkingSpots)
+                    {
+                        string carId = "id" + rnd.Next(1010, 9990);
+                        int hoursToStay = startDateTime.Hour >= 18 && startDateTime.Hour <= 20 ? rnd.Next(10, 12) : rnd.Next(1, 7);
+                        parkingState[carId] = startDateTime.AddHours(hoursToStay);
+
+                        StatesInfo movement = new();
+                        movement.DateTime = startDateTime.AddMinutes(rnd.Next(60)); // добавляем вариацию по минутам
+                        movement.Plate = carId;
+                        movement.State = "Enter pl " + rnd.Next(1, parkingSpots);
+                        _context.StateInfo.Add(movement);
+                    }
+                }
+
+                List<string> carsToLeave = parkingState.Where(p => startDateTime >= p.Value).Select(p => p.Key).ToList();
+                foreach (string car in carsToLeave)
+                {
+                    StatesInfo movement = new StatesInfo();
+                    movement.DateTime = startDateTime.AddMinutes(rnd.Next(60)); // добавляем вариацию по минутам
+                    movement.Plate = car;
+                    movement.State = "Leave pl " + rnd.Next(1, parkingSpots);
+                    _context.StateInfo.Add(movement);
+
+                    parkingState.Remove(car);
+                }
+
+                startDateTime = startDateTime.AddMinutes(1); // увеличиваем время на 1 минуту
+            }
+
+            _context.SaveChanges();
+        }
 
 		public void GetCarsMovement()
 		{
@@ -117,13 +183,13 @@ namespace CarsMovementLibrary
 
 				if (File.Exists("C:/temp/ImgSplit/img_split_" + i + ".jpg"))
 				{
-					try
-					{
+                    try
+                    {
                         // Возникает ошибка!!!
                         ParkingImg = new Bitmap("C:/temp/ImgSplit/img_split_" + i + ".jpg");
                     }
-					catch (Exception ex)
-					{
+					catch (Exception)
+                    {
 						continue;
 					}
                 }
@@ -138,7 +204,8 @@ namespace CarsMovementLibrary
 
 				if (!(p1 > 90) || !(p2 > 90))
 				{
-					using YoloV8 predictor = new("./best.onnx");
+					using YoloV8Predictor predictor = YoloV8Predictor.Create("./best.onnx");
+
 					Compunet.YoloV8.Data.DetectionResult result = predictor.Detect("./cropped_movement.jpg");
 
 					List<int> placestaken = [];
@@ -205,9 +272,11 @@ namespace CarsMovementLibrary
 								{
 									PointMovement.Add(new Point(boxCenter.X, boxCenter.Y));
 
-									StatesInfo movement = new StatesInfo();
-									movement.DateTime = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"); ;
-									Random rnd = new Random();
+                                    StatesInfo movement = new StatesInfo
+                                    {
+                                        DateTime = DateTime.Now
+                                    };
+                                    Random rnd = new Random();
 									movement.Plate = "id" + rnd.Next(1010, 9990);
 									movement.Points = string.Empty;
 									foreach (Point point in PointMovement)
@@ -242,9 +311,11 @@ namespace CarsMovementLibrary
 						{
 							Point boxCenter = PointMovement.Last();
 
-							StatesInfo movement = new StatesInfo();
-							movement.DateTime = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-							Random rnd = new Random();
+                            StatesInfo movement = new()
+                            {
+                                DateTime = DateTime.Now
+                            };
+                            Random rnd = new();
 							movement.Plate = "id" + rnd.Next(1010, 9990);
 							movement.Points = string.Empty;
 							foreach (Point point in PointMovement)
@@ -283,13 +354,13 @@ namespace CarsMovementLibrary
 
 		private void ResizeImage(int width, int height)
 		{
-			Bitmap cropped = new Bitmap(952, 612);
+			Bitmap cropped = new(952, 612);
 
 			// Create a Graphics object to do the drawing, *with the new bitmap as the target*
 			using (Graphics g = Graphics.FromImage(cropped))
 			{
 				// Draw the desired area of the original into the graphics object
-				g.DrawImage(ParkingImg, new Rectangle(0, 0, 952, 612), new System.Drawing.Rectangle(0, 618, 952, 612), GraphicsUnit.Pixel);
+				g.DrawImage(ParkingImg, new Rectangle(0, 0, 952, 612), new Rectangle(0, 618, 952, 612), GraphicsUnit.Pixel);
 			}
 			ParkingImg = cropped;
 			ParkingImg.Save("./resized_movement.jpg");
@@ -310,7 +381,7 @@ namespace CarsMovementLibrary
 
 	public class Roads
 	{
-		public Point[] Borders { get; set; }
+		public required Point[] Borders { get; set; }
 	}
 
 	// Класс для представления парковочного места
